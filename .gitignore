@@ -1,0 +1,11 @@
+/build/
+/.mygo/
+/.agents/
+mygo_windows_*.syso
+/theme-studio-e2e.exe
+*.exe
+*.sock
+*.zip
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate Release Notes & Update CHANGELOG.md
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $date = Get-Date -Format "yyyy-MM-dd"
+          $prevTag = (git tag --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          if ($prevTag) {
+            $commits = git log "$prevTag..$tag" --pretty=format:"- %s (%h)" --no-merges
+          } else {
+            $commits = git log $tag --pretty=format:"- %s (%h)" --no-merges
+          }
+          if (-not $commits) {
+            $commits = "- Maintenance release $tag"
+          }
+          $section = "## [$tag] - $date`n`n### Changes`n" + ($commits -join "`n") + "`n"
+          Set-Content -Path "release_notes.md" -Value $section -Encoding UTF8
+
+          $changelogPath = "CHANGELOG.md"
+          if (Test-Path $changelogPath) {
+            $existing = Get-Content $changelogPath -Raw -Encoding UTF8
+          } else {
+            $existing = "# Changelog`n`nAll notable changes to this project will be documented in this file.`n"
+          }
+          if ($existing -notmatch [regex]::Escape("## [$tag]")) {
+            $marker = "All notable changes to this project will be documented in this file."
+            if ($existing -match [regex]::Escape($marker)) {
+              $updated = $existing -replace [regex]::Escape($marker), "$marker`n`n$section"
+            } else {
+              $updated = "# Changelog`n`n$section`n$existing"
+            }
+            Set-Content -Path $changelogPath -Value $updated.TrimEnd() -Encoding UTF8
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add CHANGELOG.md
+            if (git status --porcelain CHANGELOG.md) {
+              git commit -m "docs: update CHANGELOG.md for $tag [skip ci]"
+              $defaultBranch = (git remote show origin | Select-String "HEAD branch:" | ForEach-Object { $_.ToString().Split(":")[1].Trim() })
+              if ($defaultBranch) {
+                git push origin "HEAD:$defaultBranch"
+              }
+            }
+          }
+
+      - name: Run Tests
+        run: go test ./...
+
+      - name: Build Windows Artifacts
+        run: go run github.com/egoist/mygo/cmd/mygo build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          files: |
+            build/windows-amd64/Theme Studio.exe
+            build/windows-amd64/theme-studio-setup-*-amd64.exe
